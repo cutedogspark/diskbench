@@ -12,11 +12,50 @@ import (
 )
 
 const (
-	iopsBlockSize = 4096              // 4K
-	iopsFileSize  = 256 * 1024 * 1024 // 256MB
+	iopsBlockSize = 4096 // 4K
 )
 
-func iopsTest(testDir string, duration int, useSync bool) []IOPSResult {
+// autoIOPSFileSize returns an appropriate IOPS test file size based on disk type.
+// The file must be larger than the device/controller cache to avoid measuring
+// cache performance instead of actual disk performance.
+//
+//	NVMe:  2 GB  (DRAM cache typically 512MB-1GB)
+//	SSD:   1 GB  (DRAM cache typically 256MB-512MB)
+//	HDD:   256 MB (on-disk cache 8-256MB)
+//	USB:   128 MB (little or no cache)
+//	NFS:   256 MB (network, no local cache concern)
+//	RAID:  4 GB  (hardware RAID controllers often have 1-4GB write-back cache)
+func autoIOPSFileSize(disk DiskInfo) int64 {
+	const (
+		_128MB = 128 * 1024 * 1024
+		_256MB = 256 * 1024 * 1024
+		_1GB   = 1024 * 1024 * 1024
+		_2GB   = 2 * 1024 * 1024 * 1024
+		_4GB   = 4 * 1024 * 1024 * 1024
+	)
+
+	// RAID controller detected — use large file to bypass controller cache
+	if disk.Interface == "RAID" {
+		return _4GB
+	}
+
+	switch disk.DiskType {
+	case "nvme":
+		return _2GB
+	case "ssd":
+		return _1GB
+	case "hdd":
+		return _256MB
+	case "usb":
+		return _128MB
+	case "nfs":
+		return _256MB
+	default:
+		return _1GB
+	}
+}
+
+func iopsTest(testDir string, duration int, useSync bool, disk DiskInfo) []IOPSResult {
 	if duration <= 0 {
 		duration = 10
 	}
@@ -28,9 +67,11 @@ func iopsTest(testDir string, duration int, useSync bool) []IOPSResult {
 		unregisterCleanup(testFile)
 	}()
 
+	fileSize := checkAvailableSpace(testDir, autoIOPSFileSize(disk))
+
 	// Create test file
-	fmt.Fprintf(os.Stdout, "  Preparing IOPS test file (%s)...", formatSize(iopsFileSize))
-	if err := createTestFile(testFile, iopsFileSize); err != nil {
+	fmt.Fprintf(os.Stdout, "  Preparing IOPS test file (%s)...", formatSize(fileSize))
+	if err := createTestFile(testFile, fileSize); err != nil {
 		fmt.Fprintf(os.Stdout, " error: %v\n", err)
 		return nil
 	}
@@ -39,7 +80,7 @@ func iopsTest(testDir string, duration int, useSync bool) []IOPSResult {
 		fmt.Fprintf(os.Stdout, "  %sNote: --sync enabled, fsync after each write (measures real disk)%s\n", colorYellow, colorReset)
 	}
 
-	numPositions := int64(iopsFileSize / iopsBlockSize)
+	numPositions := int64(fileSize / iopsBlockSize)
 	var results []IOPSResult
 
 	// QD1 Write

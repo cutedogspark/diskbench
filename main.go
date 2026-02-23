@@ -162,7 +162,7 @@ func main() {
 
 		// IOPS test
 		if runIOPS {
-			results := iopsTest(testDir, *durationFlag, *syncFlag)
+			results := iopsTest(testDir, *durationFlag, *syncFlag, disk)
 			fmt.Println()
 			if len(results) > 0 {
 				printIOPSReport(results, disk.DiskType)
